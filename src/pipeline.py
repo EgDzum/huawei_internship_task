@@ -1,6 +1,6 @@
+from src.config import SFTConfig
 from datasets import load_dataset
 from torch.utils.data import Dataset
-from src.config import SFTConfig
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM, 
@@ -122,6 +122,97 @@ class SFTPipeline:
 
         # Process final model
         print(f"downloading the model")
+        merged_model = model.merge_and_unload()
+        merged_model.save_pretrained(self._output_dir)
+        self._tokenizer.save_pretrained(self._output_dir)
+
+class QwenTrainer:
+    def __init__(
+        self,
+        model_name,
+        train_dataset,
+        lora_config,
+        output_dir,
+        batch_size=4,
+        lr_muon=3e-4,
+        muon_momentum=0.9,
+        weight_decay=0.01,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    ):
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self._model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True).to(device)
+        self._device = device
+        self._train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=True,
+        )
+        self._lora_config = lora_config
+        self._output_dir = output_dir
+
+        muon_params = []
+        adamw_params = []
+        for p in self._model.parameters():
+            if p.ndim >= 2:
+                muon_params.append(p)
+            else:
+                adamw_params.append(p)
+
+        self._muon = Muon(
+            muon_params,
+            lr=lr_muon,
+            momentum=muon_momentum,
+            weight_decay=weight_decay,
+        )
+
+        self._adamw = AdamW(
+            adamw_params,
+            lr=lr_muon,
+            weight_decay=weight_decay,
+        )
+
+    def get_gpu_memory(self):
+        if torch.cuda.is_available():
+            return torch.cuda.max_memory_allocated() / 1024**2
+        return 0.0
+
+    def reset_memory(self):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def train(self, num_epochs=3):
+        self.reset_memory()
+        step_times = []
+
+        model = get_peft_model(self._model, self._lora_config).to(self._device)
+        model.train()
+        for epoch in tqdm(range(num_epochs), desc="Epochs"):
+            for batch in tqdm(self._train_loader, desc="Batches", leave=False):
+                torch.cuda.synchronize()
+                start = time.time()
+
+                inputs = {k: v.to(self._device) for k, v in batch.items()}
+                outputs = model(**inputs, labels=inputs["input_ids"])
+                loss = outputs.loss
+
+                self._muon.zero_grad()
+                self._adamw.zero_grad()
+
+                loss.backward()
+                
+                self._muon.step()
+                self._adamw.step()
+
+                torch.cuda.synchronize()
+                end = time.time()
+                step_times.append(end - start)
+
+                if len(step_times) % 100 == 0:
+                    print(f"Loss: {loss.item():.4f}")
+                    print("Avg step time:", sum(step_times)/len(step_times))
+                    print("Peak GPU Memory (MB):", self.get_gpu_memory())
+
         merged_model = model.merge_and_unload()
         merged_model.save_pretrained(self._output_dir)
         self._tokenizer.save_pretrained(self._output_dir)
