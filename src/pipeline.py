@@ -1,6 +1,10 @@
 from src.config import SFTConfig
 from datasets import load_dataset
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW, Muon
+from tqdm.auto import tqdm
+import torch
+import time
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM, 
@@ -42,13 +46,17 @@ class TextDataset(Dataset):
             max_length=self.max_length
         )
 
-        return {"input_ids": encoding["input_ids"], "attention_mask": encoding["attention_mask"]}
+        return {
+            "input_ids": torch.tensor(encoding["input_ids"]), 
+            "attention_mask": torch.tensor(encoding["attention_mask"])
+            }
 
 
 class SFTPipeline:
     """
     A class that initializes a model, fine-tuning.
     """
+
     def __init__(
         self,
         sft_config: SFTConfig,
@@ -96,13 +104,25 @@ class SFTPipeline:
             mlm=False
         )
 
-        optimizer = self._optimizer(
-            model.parameters(),
-            lr=self._lr,
-            weight_decay=self._weight_decay
-        )
+        try:
+            optimizer = self._optimizer(
+                model.parameters(),
+                lr=self._lr,
+                weight_decay=self._weight_decay
+            )
+        except ValueError:
+            muon_params = []
+            for p in self._model.parameters():
+                if p.requires_grad and p.ndim >= 2:
+                    muon_params.append(p)
 
-        scheduler = self._scheduler.lr_scheduler(
+            optimizer = self._optimizer(
+                muon_params,
+                lr=self._lr,
+                weight_decay=self._weight_decay
+            )
+
+        scheduler = self._scheduler(
             optimizer,
             T_max=self._max_sft_steps,
             eta_min=1e-6
@@ -115,13 +135,10 @@ class SFTPipeline:
             data_collator=data_collator,
             optimizers=(optimizer, scheduler)
         )
-        
-        print(f"start fine-tuning {self._model_name} with {self._optimizer}")
+
         trainer.train()
-        print(f"fine-tuning {self._model_name} with {self._optimizer} is completed")
 
         # Process final model
-        print(f"downloading the model")
         merged_model = model.merge_and_unload()
         merged_model.save_pretrained(self._output_dir)
         self._tokenizer.save_pretrained(self._output_dir)
