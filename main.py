@@ -1,6 +1,7 @@
 from src.config import SFTConfig
-from src.pipeline import SFTPipeline, TextDataset
-from src.constants import MODEL_NAME, DATASET_NAME
+from src.pipeline import SFTPipeline, TextDataset, QwenTrainer
+from src.constants import MODEL_NAME, DATASET_NAME, DEVICE
+
 from peft import LoraConfig
 import torch
 from transformers import AutoTokenizer
@@ -8,7 +9,6 @@ from transformers import AutoTokenizer
 
 def main():
     torch.manual_seed(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lora_config = LoraConfig(
         r=4,
         lora_alpha=8,
@@ -38,7 +38,7 @@ def main():
         lr=3e-4,
         logging_steps=250,
         warmup_steps=150,
-        device=device,
+        device=DEVICE,
         dataset=train_dataset,
         lr_scheduler=torch.optim.lr_scheduler.CosineAnnealingLR,
         optimizer=torch.optim.AdamW,
@@ -56,18 +56,26 @@ def main():
         lr=3e-4,
         logging_steps=250,
         warmup_steps=150,
-        device=device,
+        device=DEVICE,
         dataset=train_dataset,
         lr_scheduler=torch.optim.lr_scheduler.CosineAnnealingLR,
         optimizer=torch.optim.Muon,
         weight_decay=0.01
     )
 
+    new_trainer = QwenTrainer(
+        model_name=MODEL_NAME,
+        output_dir="./qwen-muon-adamw",
+        train_dataset=train_dataset,
+        lora_config=lora_config
+        )
+
     pipeline_adamw = SFTPipeline(sft_config_adamw, lora_config)
     pipeline_muon = SFTPipeline(sft_config_muon, lora_config)
     
     pipeline_adamw.run()
     pipeline_muon.run()
+    new_trainer.train()
 
 
 if __name__=="__main__":

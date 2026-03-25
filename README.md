@@ -1,5 +1,5 @@
 # huawei_internship_task
-## Technical task: LLM Training Acceleration
+## Technical track: LLM Training Acceleration
 
 For this track the Qwen model has been fine-tuned with AdamW, Moun and AdamW + Moun optimizers. All the experiments are stored in comparison_notebook/experiments.ipynb file and can be seen in cells output. To reproduce the results just execute the cells with code again. 
 
@@ -12,6 +12,4 @@ To execute the pipeline, execute main.py file
 
 `
 python3 main.py
-`  
-
-## Describtion of the results
+`
